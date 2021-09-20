@@ -4,3 +4,6 @@
 [submodule "linux"]
 	path = linux
 	url = https://github.com/torvalds/linux.git
+[submodule "busybox"]
+	path = busybox
+	url = https://github.com/mirror/busybox.git

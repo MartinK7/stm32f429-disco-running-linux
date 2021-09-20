@@ -1,0 +1,470 @@
+diff --git a/Makefile b/Makefile
+index f699176..dbbfcea 100644
+--- a/Makefile
++++ b/Makefile
+@@ -9,8 +9,10 @@ GDB = $(CROSS_COMPILE)gdb
+ OPENOCD = openocd
+ KERNEL_ADDR?=0x08008000
+ DTB_ADDR?=0x08004000
++KERNEL_MAX_SIZE?=?
++DTB_MAX_SIZE?=?
+ 
+-CFLAGS := -mthumb -mcpu=cortex-m4
++CFLAGS := -mthumb -mcpu=cortex-m4 -g3
+ CFLAGS += -ffunction-sections -fdata-sections
+ CFLAGS += -Os -std=gnu99 -Wall
+ LINKERFLAGS := -nostartfiles --gc-sections
+@@ -22,7 +24,7 @@ obj-f7 += $(obj-y) usart-f7.o
+ all: stm32f429i-disco stm32429i-eval stm32f469i-disco stm32746g-eval stm32h743i-eval
+ 
+ %.o: %.c
+-	$(CC) -c $(CFLAGS) -DKERNEL_ADDR=$(KERNEL_ADDR) -DDTB_ADDR=$(DTB_ADDR) $< -o $@
++	$(CC) -c $(CFLAGS) -DKERNEL_ADDR=$(KERNEL_ADDR) -DDTB_ADDR=$(DTB_ADDR) -DKERNEL_MAX_SIZE=$(KERNEL_MAX_SIZE) -DDTB_MAX_SIZE=$(DTB_MAX_SIZE) -DINITRD_MAX_SIZE=$(INITRD_MAX_SIZE) -DINITRD_ADDR=$(INITRD_ADDR) $< -o $@
+ 
+ stm32f429i-disco: stm32f429i-disco.o $(obj-f4)
+ 	$(LD) -T stm32f429.lds $(LINKERFLAGS) -o stm32f429i-disco.elf stm32f429i-disco.o $(obj-f4)
+diff --git a/stm32f429i-disco.c b/stm32f429i-disco.c
+index 567ca3f..9cc7f3f 100644
+--- a/stm32f429i-disco.c
++++ b/stm32f429i-disco.c
+@@ -21,6 +21,34 @@
+ static void *usart_base = (void *)USART1_BASE;
+ static void *gpio_base = (void *)GPIOA_BASE;
+ 
++typedef struct __attribute__((packed)) {
++	uint8_t head;
++	uint8_t sector;
++	uint8_t cylinder;
++} chs_t;
++
++typedef struct __attribute__((packed)) {
++	uint8_t status;
++	chs_t first_sector;
++	uint8_t part_type;
++	chs_t last_sector;
++	uint32_t first_sector_lba;
++	uint32_t size_in_sectors;
++} partition_t;
++
++typedef struct __attribute__((packed)) {
++	uint8_t boot[446];
++	partition_t partition[4];
++	uint8_t signature_0x55;
++	uint8_t signature_0xAA;
++} mbr_t;
++
++void uart_putstr(const char *str);
++int8_t sdcard_init(void);
++void spi_init(void);
++void spi_deinit(void);
++int8_t sdcard_read_sector(uint32_t sector, uint8_t *data);
++
+ static void clock_setup(void)
+ {
+ 	volatile uint32_t *RCC_CR = (void *)(RCC_BASE + 0x00);
+@@ -175,6 +203,76 @@ int main(void)
+ 
+ 	usart_setup(usart_base, PLLCLK_HZ/2);
+ 	usart_putch(usart_base, '.');
++	
++	uart_putstr("\r\n\r\nBooting ...\r\n");
++
++	spi_init();
++	int8_t r = sdcard_init();
++	(void)r;
++
++	uart_putstr("Reading MBR ...\r\n");
++	mbr_t mbr;
++	sdcard_read_sector(0, (uint8_t*)&mbr);
++
++	if(mbr.signature_0x55 != 0x55 || mbr.signature_0xAA != 0xAA)
++	{
++		uart_putstr("Signature 0x55 0xAA not found!\r\n");
++		while(1);
++	}
++
++	uint32_t kernel_size_sectors = mbr.partition[0].size_in_sectors;
++	if(kernel_size_sectors*512UL > KERNEL_MAX_SIZE)
++	{
++		uart_putstr("Kernel will not fit!\r\n");
++		while(1);
++	}
++
++	uint32_t dtb_size_sectors = mbr.partition[1].size_in_sectors;
++	if(dtb_size_sectors*512UL > DTB_MAX_SIZE)
++	{
++		uart_putstr("Device tree blob will not fit!\r\n");
++		while(1);
++	}
++
++	uint32_t initrd_size_sectors = mbr.partition[2].size_in_sectors;
++	if(INITRD_MAX_SIZE != 0)
++	{
++		if(dtb_size_sectors*512UL > INITRD_MAX_SIZE)
++		{
++			uart_putstr("Initrd will not fit!\r\n");
++			while(1);
++		}
++	} else {
++			uart_putstr("Ignoring initrd ...\r\n");
++	}
++
++	uart_putstr("Loading kernel ...\r\n");
++	for(uint32_t sector = 0; sector < kernel_size_sectors; ++sector)
++	{
++		sdcard_read_sector(mbr.partition[0].first_sector_lba + sector, (uint8_t*)(KERNEL_ADDR + sector*512UL));
++		if(!(sector%128))uart_putstr(".");
++	}
++
++	uart_putstr("\r\nLoading device tree blob ...\r\n");
++	for(uint32_t sector = 0; sector < dtb_size_sectors; ++sector)
++	{
++		sdcard_read_sector(mbr.partition[1].first_sector_lba + sector, (uint8_t*)(DTB_ADDR + sector*512UL));
++		if(!(sector%2))uart_putstr(".");
++	}
++
++	if(INITRD_MAX_SIZE != 0)
++	{
++		uart_putstr("\r\nLoading initrd ...\r\n");
++		for(uint32_t sector = 0; sector < initrd_size_sectors; ++sector)
++		{
++			sdcard_read_sector(mbr.partition[2].first_sector_lba + sector, (uint8_t*)(INITRD_ADDR + sector*512UL));
++			if(!(sector%128))uart_putstr(".");
++		}
++	}
++
++	uart_putstr("\r\nExecuting kernel ...\r\n");
++	
++	spi_deinit();
+ 
+ 	start_kernel();
+ 
+@@ -326,3 +424,328 @@ void (*vector_table[16 + 91])(void) = {
+ 	noop,
+ 	noop,
+ };
++
++/* EXTRA CODE */
++
++#define __IO volatile
++
++typedef struct
++{
++  __IO uint32_t CR1;        /*!< SPI control register 1 (not used in I2S mode),      Address offset: 0x00 */
++  __IO uint32_t CR2;        /*!< SPI control register 2,                             Address offset: 0x04 */
++  __IO uint32_t SR;         /*!< SPI status register,                                Address offset: 0x08 */
++  __IO uint32_t DR;         /*!< SPI data register,                                  Address offset: 0x0C */
++  __IO uint32_t CRCPR;      /*!< SPI CRC polynomial register (not used in I2S mode), Address offset: 0x10 */
++  __IO uint32_t RXCRCR;     /*!< SPI RX CRC register (not used in I2S mode),         Address offset: 0x14 */
++  __IO uint32_t TXCRCR;     /*!< SPI TX CRC register (not used in I2S mode),         Address offset: 0x18 */
++  __IO uint32_t I2SCFGR;    /*!< SPI_I2S configuration register,                     Address offset: 0x1C */
++  __IO uint32_t I2SPR;      /*!< SPI_I2S prescaler register,                         Address offset: 0x20 */
++} SPI_TypeDef;
++
++typedef struct
++{
++  __IO uint32_t MODER;    /*!< GPIO port mode register,               Address offset: 0x00      */
++  __IO uint32_t OTYPER;   /*!< GPIO port output type register,        Address offset: 0x04      */
++  __IO uint32_t OSPEEDR;  /*!< GPIO port output speed register,       Address offset: 0x08      */
++  __IO uint32_t PUPDR;    /*!< GPIO port pull-up/pull-down register,  Address offset: 0x0C      */
++  __IO uint32_t IDR;      /*!< GPIO port input data register,         Address offset: 0x10      */
++  __IO uint32_t ODR;      /*!< GPIO port output data register,        Address offset: 0x14      */
++  __IO uint32_t BSRR;     /*!< GPIO port bit set/reset register,      Address offset: 0x18      */
++  __IO uint32_t LCKR;     /*!< GPIO port configuration lock register, Address offset: 0x1C      */
++  __IO uint32_t AFR[2];   /*!< GPIO alternate function registers,     Address offset: 0x20-0x24 */
++} GPIO_TypeDef;
++
++typedef struct
++{
++  __IO uint32_t CR;            /*!< RCC clock control register,                                  Address offset: 0x00 */
++  __IO uint32_t PLLCFGR;       /*!< RCC PLL configuration register,                              Address offset: 0x04 */
++  __IO uint32_t CFGR;          /*!< RCC clock configuration register,                            Address offset: 0x08 */
++  __IO uint32_t CIR;           /*!< RCC clock interrupt register,                                Address offset: 0x0C */
++  __IO uint32_t AHB1RSTR;      /*!< RCC AHB1 peripheral reset register,                          Address offset: 0x10 */
++  __IO uint32_t AHB2RSTR;      /*!< RCC AHB2 peripheral reset register,                          Address offset: 0x14 */
++  __IO uint32_t AHB3RSTR;      /*!< RCC AHB3 peripheral reset register,                          Address offset: 0x18 */
++  uint32_t      RESERVED0;     /*!< Reserved, 0x1C                                                                    */
++  __IO uint32_t APB1RSTR;      /*!< RCC APB1 peripheral reset register,                          Address offset: 0x20 */
++  __IO uint32_t APB2RSTR;      /*!< RCC APB2 peripheral reset register,                          Address offset: 0x24 */
++  uint32_t      RESERVED1[2];  /*!< Reserved, 0x28-0x2C                                                               */
++  __IO uint32_t AHB1ENR;       /*!< RCC AHB1 peripheral clock register,                          Address offset: 0x30 */
++  __IO uint32_t AHB2ENR;       /*!< RCC AHB2 peripheral clock register,                          Address offset: 0x34 */
++  __IO uint32_t AHB3ENR;       /*!< RCC AHB3 peripheral clock register,                          Address offset: 0x38 */
++  uint32_t      RESERVED2;     /*!< Reserved, 0x3C                                                                    */
++  __IO uint32_t APB1ENR;       /*!< RCC APB1 peripheral clock enable register,                   Address offset: 0x40 */
++  __IO uint32_t APB2ENR;       /*!< RCC APB2 peripheral clock enable register,                   Address offset: 0x44 */
++  uint32_t      RESERVED3[2];  /*!< Reserved, 0x48-0x4C                                                               */
++  __IO uint32_t AHB1LPENR;     /*!< RCC AHB1 peripheral clock enable in low power mode register, Address offset: 0x50 */
++  __IO uint32_t AHB2LPENR;     /*!< RCC AHB2 peripheral clock enable in low power mode register, Address offset: 0x54 */
++  __IO uint32_t AHB3LPENR;     /*!< RCC AHB3 peripheral clock enable in low power mode register, Address offset: 0x58 */
++  uint32_t      RESERVED4;     /*!< Reserved, 0x5C                                                                    */
++  __IO uint32_t APB1LPENR;     /*!< RCC APB1 peripheral clock enable in low power mode register, Address offset: 0x60 */
++  __IO uint32_t APB2LPENR;     /*!< RCC APB2 peripheral clock enable in low power mode register, Address offset: 0x64 */
++  uint32_t      RESERVED5[2];  /*!< Reserved, 0x68-0x6C                                                               */
++  __IO uint32_t BDCR;          /*!< RCC Backup domain control register,                          Address offset: 0x70 */
++  __IO uint32_t CSR;           /*!< RCC clock control & status register,                         Address offset: 0x74 */
++  uint32_t      RESERVED6[2];  /*!< Reserved, 0x78-0x7C                                                               */
++  __IO uint32_t SSCGR;         /*!< RCC spread spectrum clock generation register,               Address offset: 0x80 */
++  __IO uint32_t PLLI2SCFGR;    /*!< RCC PLLI2S configuration register,                           Address offset: 0x84 */
++  __IO uint32_t PLLSAICFGR;    /*!< RCC PLLSAI configuration register,                           Address offset: 0x88 */
++  __IO uint32_t DCKCFGR;       /*!< RCC Dedicated Clocks configuration register,                 Address offset: 0x8C */
++} RCC_TypeDef;
++
++#define SPI4                ((SPI_TypeDef *) ((0x40000000UL + 0x00010000UL) + 0x3400UL))
++#define GPIOE               ((GPIO_TypeDef *) ((0x40000000UL + 0x00020000UL) + 0x1000UL))
++#define RCC                 ((RCC_TypeDef *) ((0x40000000UL + 0x00020000UL) + 0x3800UL))
++
++/*******************  Bit definition for SPI_CR1 register  ********************/
++#define SPI_CR1_CPHA_Pos            (0U)                                       
++#define SPI_CR1_CPHA_Msk            (0x1UL << SPI_CR1_CPHA_Pos)                 /*!< 0x00000001 */
++#define SPI_CR1_CPHA                SPI_CR1_CPHA_Msk                           /*!<Clock Phase      */
++#define SPI_CR1_CPOL_Pos            (1U)                                       
++#define SPI_CR1_CPOL_Msk            (0x1UL << SPI_CR1_CPOL_Pos)                 /*!< 0x00000002 */
++#define SPI_CR1_CPOL                SPI_CR1_CPOL_Msk                           /*!<Clock Polarity   */
++#define SPI_CR1_MSTR_Pos            (2U)                                       
++#define SPI_CR1_MSTR_Msk            (0x1UL << SPI_CR1_MSTR_Pos)                 /*!< 0x00000004 */
++#define SPI_CR1_MSTR                SPI_CR1_MSTR_Msk                           /*!<Master Selection */
++
++#define SPI_CR1_BR_Pos              (3U)                                       
++#define SPI_CR1_BR_Msk              (0x7UL << SPI_CR1_BR_Pos)                   /*!< 0x00000038 */
++#define SPI_CR1_BR                  SPI_CR1_BR_Msk                             /*!<BR[2:0] bits (Baud Rate Control) */
++#define SPI_CR1_BR_0                (0x1UL << SPI_CR1_BR_Pos)                   /*!< 0x00000008 */
++#define SPI_CR1_BR_1                (0x2UL << SPI_CR1_BR_Pos)                   /*!< 0x00000010 */
++#define SPI_CR1_BR_2                (0x4UL << SPI_CR1_BR_Pos)                   /*!< 0x00000020 */
++
++#define SPI_CR1_SPE_Pos             (6U)                                       
++#define SPI_CR1_SPE_Msk             (0x1UL << SPI_CR1_SPE_Pos)                  /*!< 0x00000040 */
++#define SPI_CR1_SPE                 SPI_CR1_SPE_Msk                            /*!<SPI Enable                          */
++#define SPI_CR1_LSBFIRST_Pos        (7U)                                       
++#define SPI_CR1_LSBFIRST_Msk        (0x1UL << SPI_CR1_LSBFIRST_Pos)             /*!< 0x00000080 */
++#define SPI_CR1_LSBFIRST            SPI_CR1_LSBFIRST_Msk                       /*!<Frame Format                        */
++#define SPI_CR1_SSI_Pos             (8U)                                       
++#define SPI_CR1_SSI_Msk             (0x1UL << SPI_CR1_SSI_Pos)                  /*!< 0x00000100 */
++#define SPI_CR1_SSI                 SPI_CR1_SSI_Msk                            /*!<Internal slave select               */
++#define SPI_CR1_SSM_Pos             (9U)                                       
++#define SPI_CR1_SSM_Msk             (0x1UL << SPI_CR1_SSM_Pos)                  /*!< 0x00000200 */
++#define SPI_CR1_SSM                 SPI_CR1_SSM_Msk                            /*!<Software slave management           */
++#define SPI_CR1_RXONLY_Pos          (10U)                                      
++#define SPI_CR1_RXONLY_Msk          (0x1UL << SPI_CR1_RXONLY_Pos)               /*!< 0x00000400 */
++#define SPI_CR1_RXONLY              SPI_CR1_RXONLY_Msk                         /*!<Receive only                        */
++#define SPI_CR1_DFF_Pos             (11U)                                      
++#define SPI_CR1_DFF_Msk             (0x1UL << SPI_CR1_DFF_Pos)                  /*!< 0x00000800 */
++#define SPI_CR1_DFF                 SPI_CR1_DFF_Msk                            /*!<Data Frame Format                   */
++#define SPI_CR1_CRCNEXT_Pos         (12U)                                      
++#define SPI_CR1_CRCNEXT_Msk         (0x1UL << SPI_CR1_CRCNEXT_Pos)              /*!< 0x00001000 */
++#define SPI_CR1_CRCNEXT             SPI_CR1_CRCNEXT_Msk                        /*!<Transmit CRC next                   */
++#define SPI_CR1_CRCEN_Pos           (13U)                                      
++#define SPI_CR1_CRCEN_Msk           (0x1UL << SPI_CR1_CRCEN_Pos)                /*!< 0x00002000 */
++#define SPI_CR1_CRCEN               SPI_CR1_CRCEN_Msk                          /*!<Hardware CRC calculation enable     */
++#define SPI_CR1_BIDIOE_Pos          (14U)                                      
++#define SPI_CR1_BIDIOE_Msk          (0x1UL << SPI_CR1_BIDIOE_Pos)               /*!< 0x00004000 */
++#define SPI_CR1_BIDIOE              SPI_CR1_BIDIOE_Msk                         /*!<Output enable in bidirectional mode */
++#define SPI_CR1_BIDIMODE_Pos        (15U)                                      
++#define SPI_CR1_BIDIMODE_Msk        (0x1UL << SPI_CR1_BIDIMODE_Pos)             /*!< 0x00008000 */
++#define SPI_CR1_BIDIMODE            SPI_CR1_BIDIMODE_Msk                       /*!<Bidirectional data mode enable      */
++
++#define SPI_I2SCFGR_I2SE_Pos        (10U)                                      
++#define SPI_I2SCFGR_I2SE_Msk        (0x1UL << SPI_I2SCFGR_I2SE_Pos)             /*!< 0x00000400 */
++#define SPI_I2SCFGR_I2SE            SPI_I2SCFGR_I2SE_Msk                       /*!<I2S Enable         */
++#define SPI_I2SCFGR_I2SMOD_Pos      (11U)                                      
++#define SPI_I2SCFGR_I2SMOD_Msk      (0x1UL << SPI_I2SCFGR_I2SMOD_Pos)           /*!< 0x00000800 */
++#define SPI_I2SCFGR_I2SMOD          SPI_I2SCFGR_I2SMOD_Msk                     /*!<I2S mode selection */
++
++#define SPI_SR_RXNE_Pos             (0U)                                       
++#define SPI_SR_RXNE_Msk             (0x1UL << SPI_SR_RXNE_Pos)                  /*!< 0x00000001 */
++#define SPI_SR_RXNE                 SPI_SR_RXNE_Msk                            /*!<Receive buffer Not Empty */
++#define SPI_SR_TXE_Pos              (1U)                                       
++#define SPI_SR_TXE_Msk              (0x1UL << SPI_SR_TXE_Pos)                   /*!< 0x00000002 */
++#define SPI_SR_TXE                  SPI_SR_TXE_Msk                             /*!<Transmit buffer Empty    */
++#define SPI_SR_CHSIDE_Pos           (2U)                                       
++#define SPI_SR_CHSIDE_Msk           (0x1UL << SPI_SR_CHSIDE_Pos)                /*!< 0x00000004 */
++#define SPI_SR_CHSIDE               SPI_SR_CHSIDE_Msk                          /*!<Channel side             */
++#define SPI_SR_UDR_Pos              (3U)                                       
++#define SPI_SR_UDR_Msk              (0x1UL << SPI_SR_UDR_Pos)                   /*!< 0x00000008 */
++#define SPI_SR_UDR                  SPI_SR_UDR_Msk                             /*!<Underrun flag            */
++#define SPI_SR_CRCERR_Pos           (4U)                                       
++#define SPI_SR_CRCERR_Msk           (0x1UL << SPI_SR_CRCERR_Pos)                /*!< 0x00000010 */
++#define SPI_SR_CRCERR               SPI_SR_CRCERR_Msk                          /*!<CRC Error flag           */
++#define SPI_SR_MODF_Pos             (5U)                                       
++#define SPI_SR_MODF_Msk             (0x1UL << SPI_SR_MODF_Pos)                  /*!< 0x00000020 */
++#define SPI_SR_MODF                 SPI_SR_MODF_Msk                            /*!<Mode fault               */
++#define SPI_SR_OVR_Pos              (6U)                                       
++#define SPI_SR_OVR_Msk              (0x1UL << SPI_SR_OVR_Pos)                   /*!< 0x00000040 */
++#define SPI_SR_OVR                  SPI_SR_OVR_Msk                             /*!<Overrun flag             */
++#define SPI_SR_BSY_Pos              (7U)                                       
++#define SPI_SR_BSY_Msk              (0x1UL << SPI_SR_BSY_Pos)                   /*!< 0x00000080 */
++#define SPI_SR_BSY                  SPI_SR_BSY_Msk                             /*!<Busy flag                */
++#define SPI_SR_FRE_Pos              (8U)                                       
++#define SPI_SR_FRE_Msk              (0x1UL << SPI_SR_FRE_Pos)                   /*!< 0x00000100 */
++#define SPI_SR_FRE                  SPI_SR_FRE_Msk                             /*!<Frame format error flag  */
++
++#define RCC_APB2RSTR_SPI4RST_Pos           (13U)                               
++#define RCC_APB2RSTR_SPI4RST_Msk           (0x1UL << RCC_APB2RSTR_SPI4RST_Pos)  /*!< 0x00002000 */
++#define RCC_APB2RSTR_SPI4RST               RCC_APB2RSTR_SPI4RST_Msk  
++
++void uart_putstr(const char *str)
++{
++	while(*str != '\0')
++	{
++		usart_putch(usart_base, *str);
++		++str;
++	}
++}
++
++void spi_init(void)
++{
++	// Reset periph
++	RCC->APB2RSTR |=  RCC_APB2RSTR_SPI4RST;
++	RCC->APB2RSTR &= ~RCC_APB2RSTR_SPI4RST;
++	
++	//                  SPI4_SCK       SPI4_NSS       SPI4_MISO      SPI4_MOSI
++	GPIOE->AFR[0]  &= ~(0xFU<<( 2-0)*4|0xFU<<( 4-0)*4|0xFU<<( 5-0)*4|0xFU<<( 6-0)*4|0);
++	GPIOE->AFR[0]  |=  (0x5U<<( 2-0)*4|0x5U<<( 4-0)*4|0x5U<<( 5-0)*4|0x5U<<( 6-0)*4|0);
++	GPIOE->AFR[1]  &= ~(0             |0             |0             |0             |0);
++	GPIOE->AFR[1]  |=  (0             |0             |0             |0             |0);
++	GPIOE->MODER   &= ~(0x3U<<( 2*2)  |0x3U<<( 4*2)  |0x3U<<( 5*2)  |0x3U<<( 6*2)  |0);
++	GPIOE->MODER   |=  (0x2U<<( 2*2)  |0x1U<<( 4*2)  |0x2U<<( 5*2)  |0x2U<<( 6*2)  |0);
++	GPIOE->OSPEEDR &= ~(0x3U<<( 2*2)  |0x3U<<( 4*2)  |0x3U<<( 5*2)  |0x3U<<( 6*2)  |0);
++	GPIOE->OSPEEDR |=  (0x2U<<( 2*2)  |0x2U<<( 4*2)  |0x2U<<( 5*2)  |0x2U<<( 6*2)  |0);
++	GPIOE->OTYPER  &= ~(0x1U<<( 2*1)  |0x1U<<( 4*1)  |0x1U<<( 5*1)  |0x1U<<( 6*1)  |0);
++	GPIOE->OTYPER  |=  (0x0U<<( 2*1)  |0x0U<<( 4*1)  |0x0U<<( 5*1)  |0x0U<<( 6*1)  |0);
++	GPIOE->PUPDR   &= ~(0x3U<<( 2*2)  |0x3U<<( 4*2)  |0x3U<<( 5*2)  |0x3U<<( 6*2)  |0);
++	GPIOE->PUPDR   |=  (0x0U<<( 2*2)  |0x0U<<( 4*2)  |0x0U<<( 5*2)  |0x0U<<( 6*2)  |0);
++	
++	// 2-wire, 8bit, MSBfirst, master
++	SPI4->CR1 = SPI_CR1_SSM | SPI_CR1_SSI | SPI_CR1_MSTR | 0b111 << SPI_CR1_BR_Pos;
++	SPI4->CR2 = 0;
++	SPI4->I2SCFGR &= ~SPI_I2SCFGR_I2SMOD;
++	// Enable SPI
++	SPI4->CR1 |= SPI_CR1_SPE;
++}
++
++void spi_deinit(void)
++{
++	// Reset periph
++	RCC->APB2RSTR |=  RCC_APB2RSTR_SPI4RST;
++	RCC->APB2RSTR &= ~RCC_APB2RSTR_SPI4RST;
++	
++	//                  SPI4_SCK       SPI4_NSS       SPI4_MISO      SPI4_MOSI
++	GPIOE->AFR[0]  &= ~(0xFU<<( 2-0)*4|0xFU<<( 4-0)*4|0xFU<<( 5-0)*4|0xFU<<( 6-0)*4|0);
++	GPIOE->MODER   &= ~(0x3U<<( 2*2)  |0x3U<<( 4*2)  |0x3U<<( 5*2)  |0x3U<<( 6*2)  |0);
++	GPIOE->OSPEEDR &= ~(0x3U<<( 2*2)  |0x3U<<( 4*2)  |0x3U<<( 5*2)  |0x3U<<( 6*2)  |0);
++	GPIOE->OTYPER  &= ~(0x1U<<( 2*1)  |0x1U<<( 4*1)  |0x1U<<( 5*1)  |0x1U<<( 6*1)  |0);
++	GPIOE->PUPDR   &= ~(0x3U<<( 2*2)  |0x3U<<( 4*2)  |0x3U<<( 5*2)  |0x3U<<( 6*2)  |0);
++}
++
++
++uint8_t spi_txrx(uint8_t data)
++{
++	// TX value over SPI
++	SPI4->SR = 0;
++	SPI4->DR = data;
++	// Wait for transfer
++	while(!(SPI4->SR & SPI_SR_TXE));
++	while(!(SPI4->SR & SPI_SR_RXNE));
++	return SPI4->DR;
++}
++
++// Speed 1.31MHz APB1=84MHz
++static inline void spi_set_speed_high()  {SPI4->CR1 &= ~(0b111U<<3); SPI4->CR1 |= 0b001U<<3U;}
++// Speed 328kHz  APB1=84MHz
++static inline void spi_set_speed_low()	 {SPI4->CR1 |= 0b111U<<3;}
++static inline void sdcard_select(void)   {GPIOE->BSRR =  1U<<(4+16);}
++static inline void sdcard_unselect(void) {GPIOE->BSRR =  1U<<(4+ 0);}
++
++uint64_t sdcard_cmd(uint8_t index, uint32_t argument, uint8_t crc, uint8_t extResp)
++{
++	spi_txrx(0xFF);
++	sdcard_select();
++	index &= 0x7F;
++	index |= 0x40;
++	spi_txrx(index);
++	spi_txrx(argument >> 24);//MSB
++	spi_txrx(argument >> 16);
++	spi_txrx(argument >>  8);
++	spi_txrx(argument >>  0);//LSB
++	spi_txrx(crc);
++	uint64_t resp = -1;
++	if(extResp)
++	{
++		for(uint32_t try=0; try < 1000 && ((uint8_t*)&resp)[4] == 255; ++try)
++		{
++			((uint8_t*)&resp)[4] = spi_txrx(0xFF);
++		}
++		((uint8_t*)&resp)[3] = spi_txrx(0xFF);
++		((uint8_t*)&resp)[2] = spi_txrx(0xFF);
++		((uint8_t*)&resp)[1] = spi_txrx(0xFF);
++		((uint8_t*)&resp)[0] = spi_txrx(0xFF);
++	} else {
++		for(uint32_t try=0; try < 1000 && ((uint8_t*)&resp)[0] == 255; ++try)
++		{
++			((uint8_t*)&resp)[0] = spi_txrx(0xFF);
++		}
++	}
++	sdcard_unselect();
++	spi_txrx(0xFF);
++	return resp;
++}
++
++int8_t sdcard_init(void)
++{
++	for(volatile int i=0; i<10000; ++i) asm volatile("nop");
++	spi_set_speed_low();
++	sdcard_unselect();
++
++	// Dummy clocks
++	for(uint32_t i=0; i<20; ++i)
++		spi_txrx(0xFF);
++
++	uint64_t resp;
++	// Software reset
++	resp = sdcard_cmd(0, 0x00000000, 0x95, 0);
++	if((resp&0xFF) != 1)return 1;
++	resp = sdcard_cmd(8, 0x000001AA, 0x87, 1);
++	if((resp&0xFF) != 0xAA)return 1;
++
++	// CMD55 - ACMDC41
++	do {
++		resp = sdcard_cmd(55, 0x00000000, 0x00, 0);
++		if((resp&0xFF) != 1)return 1;
++		resp = sdcard_cmd(41, 0x40000000, 0x00, 0);
++	} while( (resp&0xFF) != 0x00 );
++
++	resp = sdcard_cmd(58, 0x40000000, 0x00, 1);
++	if(resp & (1 << 30)) {
++		// SDHC or SDXC
++	} else {
++		// Ver2 or later standard SD Memory Card
++	}
++
++	spi_set_speed_high();
++	return 0;
++}
++
++int8_t sdcard_read_sector(uint32_t sector, uint8_t *data)
++{
++	uint64_t resp;
++
++	// Read block command
++	do {
++		resp = sdcard_cmd(17, sector, 0x00, 0);
++	} while( (resp&0xFF) != 0x00 );
++
++	for(volatile int i=0; i<10000; ++i) asm volatile("nop");
++
++	// Wait for token
++	sdcard_select();
++	while(spi_txrx(0xFF) != 0xFE);
++
++	// Read actual data
++	for (uint32_t i=0; i<512; ++i)
++		data[i] = spi_txrx(0xFF);
++
++	spi_txrx(0xFF); // CRC
++	spi_txrx(0xFF); // CRC
++	resp = spi_txrx(0xFF);	// extra 8 SCK pulses
++	sdcard_unselect();
++
++	return 0;
++}
++

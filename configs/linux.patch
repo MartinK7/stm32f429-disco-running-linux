@@ -1,0 +1,72 @@
+diff --git a/arch/arm/boot/dts/stm32f4-pinctrl.dtsi b/arch/arm/boot/dts/stm32f4-pinctrl.dtsi
+index 4774163af54b..678d302359ad 100644
+--- a/arch/arm/boot/dts/stm32f4-pinctrl.dtsi
++++ b/arch/arm/boot/dts/stm32f4-pinctrl.dtsi
+@@ -383,6 +383,20 @@ pins2 {
+ 				};
+ 			};
+ 
++			spi4_pins: spi4-0 {
++				pins {
++					pinmux = <STM32_PINMUX('E', 2, AF5)>,
++						/* SPI5_CLK */
++						 <STM32_PINMUX('E', 6, AF5)>,
++						/* SPI5_MOSI */
++						<STM32_PINMUX('E', 5, AF5)>;
++						/* SPI5_MISO */
++					bias-disable;
++					drive-push-pull;
++					slew-rate = <2>;
++				};
++			};
++
+ 			i2c3_pins: i2c3-0 {
+ 				pins {
+ 					pinmux = <STM32_PINMUX('C', 9, AF4)>,
+diff --git a/arch/arm/boot/dts/stm32f429-disco.dts b/arch/arm/boot/dts/stm32f429-disco.dts
+index 3dc068b91ca1..ed7e01437361 100644
+--- a/arch/arm/boot/dts/stm32f429-disco.dts
++++ b/arch/arm/boot/dts/stm32f429-disco.dts
+@@ -57,13 +57,14 @@ / {
+ 	compatible = "st,stm32f429i-disco", "st,stm32f429";
+ 
+ 	chosen {
+-		bootargs = "root=/dev/ram";
++//		bootargs = "root=/dev/mmcblk0p3 rootwait rw";
++		bootargs = "rdinit=/init.sh console=ttySTM0,115200n8 earlyprintk";
+ 		stdout-path = "serial0:115200n8";
+ 	};
+ 
+-	memory@90000000 {
++	memory@90300000 {
+ 		device_type = "memory";
+-		reg = <0x90000000 0x800000>;
++		reg = <0x90300000 0x500000>;
+ 	};
+ 
+ 	aliases {
+@@ -173,6 +174,19 @@ &rtc {
+ 	status = "okay";
+ };
+ 
++&spi4 {
++	status = "okay";
++	pinctrl-0 = <&spi4_pins>;
++	pinctrl-names = "default";
++	cs-gpios = <&gpioe 4 GPIO_ACTIVE_HIGH>;
++	mmc-slot@0 {
++		compatible = "mmc-spi-slot";
++		reg = <0>;
++		voltage-ranges = <3200 3400>;
++		spi-max-frequency = <1000000>;
++	};
++};
++
+ &spi5 {
+ 	status = "okay";
+ 	pinctrl-0 = <&spi5_pins>;
+@@ -220,3 +234,4 @@ &usbotg_hs {
+ 	pinctrl-names = "default";
+ 	status = "okay";
+ };
++
