@@ -1,1 +1,7 @@
 initramfs/
+sdcard.img
+tmp/
+root/
+mmcfs.ext2
+flash.bin
+initrd/

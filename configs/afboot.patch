@@ -1,13 +1,17 @@
 diff --git a/Makefile b/Makefile
-index f699176..dbbfcea 100644
+index f699176..087a5ba 100644
 --- a/Makefile
 +++ b/Makefile
-@@ -9,8 +9,10 @@ GDB = $(CROSS_COMPILE)gdb
+@@ -7,10 +7,12 @@ OBJDUMP = $(CROSS_COMPILE)objdump
+ SIZE = $(CROSS_COMPILE)size
+ GDB = $(CROSS_COMPILE)gdb
  OPENOCD = openocd
- KERNEL_ADDR?=0x08008000
- DTB_ADDR?=0x08004000
-+KERNEL_MAX_SIZE?=?
-+DTB_MAX_SIZE?=?
+-KERNEL_ADDR?=0x08008000
+-DTB_ADDR?=0x08004000
++KERNEL_ADDR?=0x90000000
++DTB_ADDR?=0x902F8000
++KERNEL_MAX_SIZE?=0x002F8000
++DTB_MAX_SIZE?=0x00008000
  
 -CFLAGS := -mthumb -mcpu=cortex-m4
 +CFLAGS := -mthumb -mcpu=cortex-m4 -g3
@@ -19,12 +23,12 @@ index f699176..dbbfcea 100644
  
  %.o: %.c
 -	$(CC) -c $(CFLAGS) -DKERNEL_ADDR=$(KERNEL_ADDR) -DDTB_ADDR=$(DTB_ADDR) $< -o $@
-+	$(CC) -c $(CFLAGS) -DKERNEL_ADDR=$(KERNEL_ADDR) -DDTB_ADDR=$(DTB_ADDR) -DKERNEL_MAX_SIZE=$(KERNEL_MAX_SIZE) -DDTB_MAX_SIZE=$(DTB_MAX_SIZE) -DINITRD_MAX_SIZE=$(INITRD_MAX_SIZE) -DINITRD_ADDR=$(INITRD_ADDR) $< -o $@
++	$(CC) -c $(CFLAGS) -DKERNEL_ADDR=$(KERNEL_ADDR) -DDTB_ADDR=$(DTB_ADDR) -DKERNEL_MAX_SIZE=$(KERNEL_MAX_SIZE) -DDTB_MAX_SIZE=$(DTB_MAX_SIZE) $< -o $@
  
  stm32f429i-disco: stm32f429i-disco.o $(obj-f4)
  	$(LD) -T stm32f429.lds $(LINKERFLAGS) -o stm32f429i-disco.elf stm32f429i-disco.o $(obj-f4)
 diff --git a/stm32f429i-disco.c b/stm32f429i-disco.c
-index 567ca3f..9cc7f3f 100644
+index 567ca3f..2b79f2d 100644
 --- a/stm32f429i-disco.c
 +++ b/stm32f429i-disco.c
 @@ -21,6 +21,34 @@
@@ -62,7 +66,7 @@ index 567ca3f..9cc7f3f 100644
  static void clock_setup(void)
  {
  	volatile uint32_t *RCC_CR = (void *)(RCC_BASE + 0x00);
-@@ -175,6 +203,76 @@ int main(void)
+@@ -175,6 +203,54 @@ int main(void)
  
  	usart_setup(usart_base, PLLCLK_HZ/2);
  	usart_putch(usart_base, '.');
@@ -97,18 +101,6 @@ index 567ca3f..9cc7f3f 100644
 +		while(1);
 +	}
 +
-+	uint32_t initrd_size_sectors = mbr.partition[2].size_in_sectors;
-+	if(INITRD_MAX_SIZE != 0)
-+	{
-+		if(dtb_size_sectors*512UL > INITRD_MAX_SIZE)
-+		{
-+			uart_putstr("Initrd will not fit!\r\n");
-+			while(1);
-+		}
-+	} else {
-+			uart_putstr("Ignoring initrd ...\r\n");
-+	}
-+
 +	uart_putstr("Loading kernel ...\r\n");
 +	for(uint32_t sector = 0; sector < kernel_size_sectors; ++sector)
 +	{
@@ -123,23 +115,13 @@ index 567ca3f..9cc7f3f 100644
 +		if(!(sector%2))uart_putstr(".");
 +	}
 +
-+	if(INITRD_MAX_SIZE != 0)
-+	{
-+		uart_putstr("\r\nLoading initrd ...\r\n");
-+		for(uint32_t sector = 0; sector < initrd_size_sectors; ++sector)
-+		{
-+			sdcard_read_sector(mbr.partition[2].first_sector_lba + sector, (uint8_t*)(INITRD_ADDR + sector*512UL));
-+			if(!(sector%128))uart_putstr(".");
-+		}
-+	}
-+
 +	uart_putstr("\r\nExecuting kernel ...\r\n");
 +	
 +	spi_deinit();
  
  	start_kernel();
  
-@@ -326,3 +424,328 @@ void (*vector_table[16 + 91])(void) = {
+@@ -326,3 +402,328 @@ void (*vector_table[16 + 91])(void) = {
  	noop,
  	noop,
  };
