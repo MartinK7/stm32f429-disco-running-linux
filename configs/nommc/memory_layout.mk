@@ -12,7 +12,7 @@
 DATADIR=initramfs
 BOOT_FROM_MMC=0
 BOOTLOADER=afboot-stm32/stm32f429i-disco.bin
-KERNEL=linux/arch/arm/boot/zImage
+KERNEL=linux/arch/arm/boot/xipImage
 DTB=linux/arch/arm/boot/dts/stm32f429-disco.dtb
 BOOTLOADER_ADDR=0x08000000
 KERNEL_ADDR=0x08006800
