@@ -24,9 +24,8 @@ clean:
 	-rm sdcard.img flash.bin mmcfs.ext2
 	@echo "clean - done!"
 
-
 # Reset whole project
---mrproper: clean
+mrproper: clean
 	cd linux && \
 	git clean -xfd && \
 	git restore .
@@ -39,7 +38,7 @@ clean:
 	@echo "mrproer - done!"
 
 # Prepare project
-prepare: --mrproper
+prepare: mrproper
 	cd afboot-stm32 && git apply ../configs/afboot.patch
 	cp configs/$(CFGDIR)/spl_linux_defconfig linux/arch/arm/configs/
 	cp configs/$(CFGDIR)/spl_busybox_defconfig busybox/configs/
@@ -105,7 +104,7 @@ bootloader:
 	make clean stm32f429i-disco \
 	KERNEL_ADDR=$(KERNEL_ADDR) DTB_ADDR=$(DTB_ADDR) \
 	KERNEL_MAX_SIZE=$(KERNEL_MAX_SIZE) DTB_MAX_SIZE=$(DTB_MAX_SIZE) BOOT_FROM_MMC=$(BOOT_FROM_MMC)
-	cp afboot-stm32/stm32f429i-disco.bin flash.bin
+	cp $(BOOTLOADER) flash.bin
 	@echo "bootloader - done!"
 
 flash: bootloader
@@ -123,9 +122,19 @@ sdcard:
 	fakeroot genimage --config configs/yesmmc/sdcard.config --inputpath . --outputpath .
 	-rm tmp root mmcfs.ext2 -rf
 	@echo "sdcard - done!"
+	
+define my_important_task =
+	echo $(wc -c < $KERNEL)
+endef
 
 bootloader-with-kernel: bootloader
-	add some dd commands and checks here
+	-rm flash.bin
+	./if.sh $(BOOTLOADER) $(BOOTLOADER_MAX_SIZE) "Bootloader will not fit!"
+	./if.sh $(DTB) $(DTB_MAX_SIZE) "Bootloader will not fit!"
+	./if.sh $(KERNEL) $(KERNEL_MAX_SIZE) "Kernel will not fit!"
+	dd if=$(BOOTLOADER) of=flash.bin bs=1 seek=$(BOOTLOADER_OFFSET_IN_FLASH_BIN) conv=notrunc,noerror && \
+	dd if=${DTB} of=flash.bin bs=1 seek=$(DTB_OFFSET_IN_FLASH_BIN) conv=notrunc,noerror && \
+	dd if=${KERNEL} of=flash.bin bs=1 seek=$(KERNEL_OFFSET_IN_FLASH_BIN) conv=notrunc,noerror
 	@echo "bootloader-with-kernel - done!"
 
 ######################################################################

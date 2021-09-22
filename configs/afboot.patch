@@ -28,13 +28,14 @@ index f699176..087a5ba 100644
  stm32f429i-disco: stm32f429i-disco.o $(obj-f4)
  	$(LD) -T stm32f429.lds $(LINKERFLAGS) -o stm32f429i-disco.elf stm32f429i-disco.o $(obj-f4)
 diff --git a/stm32f429i-disco.c b/stm32f429i-disco.c
-index 567ca3f..2b79f2d 100644
+index 567ca3f..4e1c052 100644
 --- a/stm32f429i-disco.c
 +++ b/stm32f429i-disco.c
-@@ -21,6 +21,34 @@
+@@ -21,6 +21,37 @@
  static void *usart_base = (void *)USART1_BASE;
  static void *gpio_base = (void *)GPIOA_BASE;
  
++#if BOOT_FROM_MMC == 1
 +typedef struct __attribute__((packed)) {
 +	uint8_t head;
 +	uint8_t sector;
@@ -57,20 +58,22 @@ index 567ca3f..2b79f2d 100644
 +	uint8_t signature_0xAA;
 +} mbr_t;
 +
-+void uart_putstr(const char *str);
 +int8_t sdcard_init(void);
 +void spi_init(void);
 +void spi_deinit(void);
 +int8_t sdcard_read_sector(uint32_t sector, uint8_t *data);
++#endif
++
++void uart_putstr(const char *str);
 +
  static void clock_setup(void)
  {
  	volatile uint32_t *RCC_CR = (void *)(RCC_BASE + 0x00);
-@@ -175,6 +203,54 @@ int main(void)
+@@ -175,7 +206,55 @@ int main(void)
  
  	usart_setup(usart_base, PLLCLK_HZ/2);
  	usart_putch(usart_base, '.');
-+	
++#if BOOT_FROM_MMC == 1
 +	uart_putstr("\r\n\r\nBooting ...\r\n");
 +
 +	spi_init();
@@ -114,19 +117,31 @@ index 567ca3f..2b79f2d 100644
 +		sdcard_read_sector(mbr.partition[1].first_sector_lba + sector, (uint8_t*)(DTB_ADDR + sector*512UL));
 +		if(!(sector%2))uart_putstr(".");
 +	}
-+
+ 
 +	uart_putstr("\r\nExecuting kernel ...\r\n");
 +	
 +	spi_deinit();
- 
++#endif
  	start_kernel();
  
-@@ -326,3 +402,328 @@ void (*vector_table[16 + 91])(void) = {
+ 	return 0;
+@@ -326,3 +405,331 @@ void (*vector_table[16 + 91])(void) = {
  	noop,
  	noop,
  };
 +
 +/* EXTRA CODE */
++
++void uart_putstr(const char *str)
++{
++	while(*str != '\0')
++	{
++		usart_putch(usart_base, *str);
++		++str;
++	}
++}
++
++#if BOOT_FROM_MMC == 1
 +
 +#define __IO volatile
 +
@@ -284,15 +299,6 @@ index 567ca3f..2b79f2d 100644
 +#define RCC_APB2RSTR_SPI4RST_Msk           (0x1UL << RCC_APB2RSTR_SPI4RST_Pos)  /*!< 0x00002000 */
 +#define RCC_APB2RSTR_SPI4RST               RCC_APB2RSTR_SPI4RST_Msk  
 +
-+void uart_putstr(const char *str)
-+{
-+	while(*str != '\0')
-+	{
-+		usart_putch(usart_base, *str);
-+		++str;
-+	}
-+}
-+
 +void spi_init(void)
 +{
 +	// Reset periph
@@ -449,4 +455,5 @@ index 567ca3f..2b79f2d 100644
 +
 +	return 0;
 +}
++#endif
 +

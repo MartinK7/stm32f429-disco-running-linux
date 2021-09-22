@@ -2,7 +2,7 @@
 # Automatically generated file; DO NOT EDIT.
 # Linux/arm 5.15.0-rc2 Kernel Configuration
 #
-CONFIG_CC_VERSION_TEXT="arm-linux-gnueabi-gcc (Ubuntu 9.3.0-17ubuntu1~20.04) 9.3.0"
+CONFIG_CC_VERSION_TEXT="gcc (Ubuntu 9.3.0-17ubuntu1~20.04) 9.3.0"
 CONFIG_CC_IS_GCC=y
 CONFIG_GCC_VERSION=90300
 CONFIG_CLANG_VERSION=0
@@ -276,8 +276,8 @@ CONFIG_FORCE_MAX_ZONEORDER=11
 CONFIG_USE_OF=y
 CONFIG_ATAGS=y
 # CONFIG_DEPRECATED_PARAM_STRUCT is not set
-CONFIG_ZBOOT_ROM_TEXT=0x0
-CONFIG_ZBOOT_ROM_BSS=0x0
+CONFIG_ZBOOT_ROM_TEXT=0x08006800
+CONFIG_ZBOOT_ROM_BSS=0x90000000
 # CONFIG_ARM_APPENDED_DTB is not set
 CONFIG_CMDLINE=""
 # CONFIG_XIP_KERNEL is not set
@@ -338,8 +338,6 @@ CONFIG_ARCH_SUSPEND_POSSIBLE=y
 #
 # end of Tegra firmware driver
 # end of Firmware Drivers
-
-CONFIG_AS_VFP_VMRS_FPINST=y
 
 #
 # General architecture-dependent options
