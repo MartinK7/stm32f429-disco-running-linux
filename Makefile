@@ -1,6 +1,5 @@
-THREADS?=12
-CFGDIR?=yesmmc
-include configs/$(CFGDIR)/memory_layout.mk
+include configs/common/config.mk
+include configs/$(CFGDIR)/config.mk
 
 ######################################################################
 ## PROJECT
@@ -39,7 +38,7 @@ mrproper: clean
 
 # Prepare project
 prepare: mrproper
-	cd afboot-stm32 && git apply ../configs/afboot.patch
+	cd afboot-stm32 && git apply ../configs/common/afboot.patch
 	cp configs/$(CFGDIR)/spl_linux_defconfig linux/arch/arm/configs/
 	cp configs/$(CFGDIR)/spl_busybox_defconfig busybox/configs/
 	cd linux && git apply ../configs/$(CFGDIR)/linux.patch
@@ -53,7 +52,7 @@ prepare: mrproper
 
 # Exporting binaries path into the $PATH
 patches:
-	cd afboot-stm32 && git diff > ../configs/afboot.patch
+	cd afboot-stm32 && git diff > ../configs/common/afboot.patch
 	cd linux && git diff > ../configs/$(CFGDIR)/linux.patch && cp .config ../configs/$(CFGDIR)/spl_linux_defconfig
 	cd busybox && cp .config ../configs/$(CFGDIR)/spl_busybox_defconfig
 	@echo "patches - meowed!"
@@ -162,6 +161,7 @@ busybox:
 	cd busybox && make ARCH=arm CROSS_COMPILE=arm-buildroot-uclinux-uclibcgnueabi- CONFIG_PREFIX=../$(DATADIR)/ install
 	cd $(DATADIR) && \
 	cp ../configs/$(CFGDIR)/extra_files/* ./ -r && \
+	cp ../configs/common/extra_files/* ./ -r && \
 	mkdir -p etc proc sys dev etc/init.d usr/lib mnt && \
 	tree .
 	@echo "busybox - done!"

@@ -1,0 +1,2 @@
+THREADS?=12
+CFGDIR?=yesmmc
