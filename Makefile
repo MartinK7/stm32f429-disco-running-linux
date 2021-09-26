@@ -8,11 +8,7 @@ include configs/$(CFGDIR)/config.mk
 # Build automaticly
 all:
 	-rm sdcard.img flash.bin
-ifeq ($(CFGDIR),yesmmc)
-	make bootloader busybox linux sdcard
-else
-	make busybox linux bootloader-with-kernel
-endif
+	make images
 	@echo "all - done!"
 
 clean:
@@ -67,30 +63,30 @@ patches:
 ## LINUX KERNEL
 ######################################################################
 
-# linux tiny-config
-linuxt:
+# linux tinyconfig
+linuxt-tinyconfig:
 	cd linux && make ARCH=arm tinyconfig
-	@echo "linuxt - done!"
+	@echo "linuxt-tinyconfig - done!"
 
 # linux defconfig
-linuxd:
+linux-defconfig:
 	cd linux && make ARCH=arm stm32_defconfig
-	@echo "linuxd - done!"
+	@echo "linux-defconfig - done!"
 
 # linux menuconfig
-linuxm:
+linux-menuconfig:
 	cd linux && make ARCH=arm menuconfig
-	@echo "linuxm - done!"
+	@echo "linux-menuconfig - done!"
 
 # linux clean
-linuxc:
+linux-clean:
 	cd linux && make ARCH=arm clean
-	@echo "linuxc - done!"
+	@echo "linux-clean - done!"
 
 # linux all
 .PHONY: linux
 linux:
-	cd linux && make ARCH=arm CROSS_COMPILE=arm-linux-gnueabi- -j${THREADS} all
+	cd linux && make ARCH=arm CROSS_COMPILE=arm-linux-gnueabi- -j$(THREADS) all
 	@echo "linux - done!"
 
 ######################################################################
@@ -103,38 +99,48 @@ bootloader:
 	make clean stm32f429i-disco \
 	KERNEL_ADDR=$(KERNEL_ADDR) DTB_ADDR=$(DTB_ADDR) \
 	KERNEL_MAX_SIZE=$(KERNEL_MAX_SIZE) DTB_MAX_SIZE=$(DTB_MAX_SIZE) BOOT_FROM_MMC=$(BOOT_FROM_MMC)
-	cp $(BOOTLOADER) flash.bin
 	@echo "bootloader - done!"
 
-flash: bootloader
-	cd afboot-stm32 && make flash_stm32f429i-disco
+flash:
+	openocd -f board/stm32f429discovery.cfg \
+	  -c "init" \
+	  -c "reset init" \
+	  -c "flash probe 0" \
+	  -c "flash info 0" \
+	  -c "flash write_image erase flash.bin 0x08000000" \
+	  -c "reset run" \
+	  -c "shutdown"
 	@echo "flash - done!"
 
 ######################################################################
 # IMAGES
 ######################################################################
 
-sdcard:
+images: busybox linux bootloader
+ifeq ($(CFGDIR),yesmmc)
+	cp $(BOOTLOADER) flash.bin
 	-rm tmp root -rf
 	mkdir tmp root
 	fakeroot genext2fs -B 1024 -b 8192 -d configs/yesmmc/mmcfs/ mmcfs.ext2
 	fakeroot genimage --config configs/yesmmc/sdcard.config --inputpath . --outputpath .
 	-rm tmp root mmcfs.ext2 -rf
-	@echo "sdcard - done!"
-	
-define my_important_task =
-	echo $(wc -c < $KERNEL)
-endef
-
-bootloader-with-kernel: bootloader
-	-rm flash.bin
+else
 	./if.sh $(BOOTLOADER) $(BOOTLOADER_MAX_SIZE) "Bootloader will not fit!"
 	./if.sh $(DTB) $(DTB_MAX_SIZE) "Bootloader will not fit!"
 	./if.sh $(KERNEL) $(KERNEL_MAX_SIZE) "Kernel will not fit!"
 	dd if=$(BOOTLOADER) of=flash.bin bs=1 seek=$(BOOTLOADER_OFFSET_IN_FLASH_BIN) conv=notrunc,noerror && \
-	dd if=${DTB} of=flash.bin bs=1 seek=$(DTB_OFFSET_IN_FLASH_BIN) conv=notrunc,noerror && \
-	dd if=${KERNEL} of=flash.bin bs=1 seek=$(KERNEL_OFFSET_IN_FLASH_BIN) conv=notrunc,noerror
-	@echo "bootloader-with-kernel - done!"
+	dd if=$(DTB) of=flash.bin bs=1 seek=$(DTB_OFFSET_IN_FLASH_BIN) conv=notrunc,noerror && \
+	dd if=$(KERNEL) of=flash.bin bs=1 seek=$(KERNEL_OFFSET_IN_FLASH_BIN) conv=notrunc,noerror
+endif
+	@echo " "
+	@echo "-------------------------------------------------------------------------------"
+ifeq ($(CFGDIR),yesmmc)
+	@echo "[sdcard.img] --> SD-CARD image is ready!"
+endif
+	@echo "[flash.bin]  --> STM32 flash memory image is ready! Flash it with: 'make flash'"
+	@echo "-------------------------------------------------------------------------------"
+	@echo " "
+	@echo "images - done!"
 
 ######################################################################
 # BUSYBOX
@@ -142,21 +148,21 @@ bootloader-with-kernel: bootloader
 
 busybox-clean:
 	cd busybox && make ARCH=arm CROSS_COMPILE=arm-buildroot-uclinux-uclibcgnueabi- clean
-	@echo "busyboxc - done!"
+	@echo "busybox-clean - done!"
 
 busybox-allnoconfig:
 	cd busybox && make ARCH=arm CROSS_COMPILE=arm-buildroot-uclinux-uclibcgnueabi- allnoconfig
 	cd ..
-	@echo "busyboxd - done!"
+	@echo "busybox-allnoconfig - done!"
 
 busybox-menuconfig:
 	cd busybox && make ARCH=arm CROSS_COMPILE=arm-buildroot-uclinux-uclibcgnueabi- menuconfig
-	@echo "busyboxm - done!"
+	@echo "busybox-menuconfig - done!"
 
 .PHONY: busybox
 busybox:
 	rm -rf initramfs initrd
-	cd busybox && make ARCH=arm CROSS_COMPILE=arm-buildroot-uclinux-uclibcgnueabi- SKIP_STRIP=y -j${THREADS} all
+	cd busybox && make ARCH=arm CROSS_COMPILE=arm-buildroot-uclinux-uclibcgnueabi- SKIP_STRIP=y -j$(THREADS) all
 	mkdir $(DATADIR)
 	cd busybox && make ARCH=arm CROSS_COMPILE=arm-buildroot-uclinux-uclibcgnueabi- CONFIG_PREFIX=../$(DATADIR)/ install
 	cd $(DATADIR) && \
